@@ -2,22 +2,471 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <title>Mentor Étudiant - MVP</title>
+  <title>Mentor NWS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Markdown renderer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
-    body { font-family: sans-serif; max-width: 600px; margin: 20px auto; }
-    #chat { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: auto; }
-    .msg { margin: 5px 0; }
-    .me { font-weight: bold; }
-    .bot { color: #333; }
+    :root {
+      /* Palette inspirée NWS */
+      --nws-yellow: #ffc72c;
+      --nws-teal: #00c7b1;
+      --nws-purple: #6c3df4;
+      --nws-red: #ff4b4b;
+
+      --bg: #f3f4ff;
+      --bg-soft: #ffffff;
+      --border-subtle: rgba(15, 23, 42, 0.06);
+      --text-main: #111827;
+      --text-soft: #6b7280;
+
+      --radius-xl: 18px;
+      --radius-xxl: 22px;
+      --shadow-soft: 0 16px 40px rgba(15, 23, 42, 0.12);
+      --font-main: system-ui, -apple-system, BlinkMacSystemFont, -sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: var(--font-main);
+      background:
+        radial-gradient(circle at top left, #ffffff 0, #eef2ff 36%, #e0f7ff 100%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: stretch;
+    }
+
+    .app {
+      width: min(1120px, 100%);
+      margin: 18px;
+      background: var(--bg-soft);
+      border-radius: 28px;
+      padding: 18px 18px 14px;
+      box-shadow: var(--shadow-soft);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .app-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 12px 8px;
+      border-radius: 20px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(
+          135deg,
+          rgba(255, 199, 44, 0.14),
+          rgba(0, 199, 177, 0.12),
+          rgba(108, 61, 244, 0.16)
+        );
+      border: 1px solid rgba(148, 163, 253, 0.26);
+    }
+
+    .app-header::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px 0;
+      height: 3px;
+      background: linear-gradient(
+        to right,
+        var(--nws-yellow),
+        var(--nws-teal),
+        var(--nws-purple),
+        var(--nws-red)
+      );
+      opacity: 0.9;
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 14px;
+      background:
+        radial-gradient(circle at 30% 0, #ffffff, #ffc72c),
+        var(--nws-purple);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: #111827;
+      flex-shrink: 0;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.18);
+    }
+
+    .app-title {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .app-title h1 {
+      font-size: 18px;
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .app-title span {
+      font-size: 11px;
+      color: var(--text-soft);
+    }
+
+    .badge-nws {
+      font-size: 9px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: #111827;
+      color: #f9fafb;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 3px;
+      width: fit-content;
+    }
+
+    .badge-pill {
+      margin-left: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 4px;
+      font-size: 9px;
+      color: var(--text-soft);
+    }
+
+    .badge-pill span.label {
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 253, 0.7);
+      background: rgba(255, 255, 255, 0.9);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #4b5563;
+    }
+
+    .badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--nws-teal);
+      box-shadow: 0 0 8px var(--nws-teal);
+    }
+
+    .chat-wrapper {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 8px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .helper-bar {
+      font-size: 10px;
+      color: var(--text-soft);
+      padding: 8px 10px;
+      border-radius: 14px;
+      background: #f9fafb;
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .email-label {
+      font-weight: 600;
+      color: var(--nws-purple);
+    }
+
+    .chat {
+      border-radius: 22px;
+      padding: 10px;
+      background: #ffffff;
+      border: 1px solid rgba(229, 231, 235, 0.98);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .msg-row {
+      display: flex;
+      margin: 2px 0;
+    }
+
+    .msg-row.me {
+      justify-content: flex-end;
+    }
+
+    .msg-row.mentor {
+      justify-content: flex-start;
+    }
+
+    .msg {
+      max-width: 78%;
+      padding: 8px 10px;
+      border-radius: var(--radius-xl);
+      font-size: 13px;
+      line-height: 1.5;
+      border: 1px solid transparent;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.04);
+    }
+
+    .msg.me {
+      background: linear-gradient(
+        135deg,
+        rgba(255, 199, 44, 0.16),
+        rgba(0, 199, 177, 0.26)
+      );
+      color: #111827;
+      border-top-right-radius: var(--radius-xxl);
+      border-bottom-right-radius: 6px;
+      border-color: rgba(252, 211, 77, 0.7);
+    }
+
+    .msg.mentor {
+      background: #f9fafb;
+      border-radius: var(--radius-xxl) var(--radius-xl) var(--radius-xl) 6px;
+      border-color: rgba(229, 231, 235, 1);
+    }
+
+    .msg .label {
+      display: block;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: var(--nws-purple);
+      margin-bottom: 2px;
+    }
+
+    /* Markdown styling dans les messages mentor */
+    .msg.mentor h1,
+    .msg.mentor h2,
+    .msg.mentor h3 {
+      font-size: 13px;
+      margin: 4px 0 2px;
+      font-weight: 600;
+      color: var(--nws-purple);
+    }
+
+    .msg.mentor ul,
+    .msg.mentor ol {
+      padding-left: 16px;
+      margin: 2px 0;
+    }
+
+    .msg.mentor li {
+      margin: 1px 0;
+    }
+
+    .msg.mentor code {
+      font-family: monospace;
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: #111827;
+      border: 1px solid rgba(148, 163, 253, 0.5);
+      color: var(--nws-yellow);
+    }
+
+    .msg.mentor a {
+      color: var(--nws-purple);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(108, 61, 244, 0.3);
+    }
+
+    .msg.mentor a:hover {
+      border-bottom-color: rgba(108, 61, 244, 0.8);
+    }
+
+    .typing {
+      display: inline-flex;
+      gap: 3px;
+      align-items: center;
+      font-size: 10px;
+      color: var(--text-soft);
+    }
+
+    .typing span {
+      width: 4px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--nws-purple);
+      opacity: 0.4;
+      animation: blink 1s infinite alternate;
+    }
+
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+
+    @keyframes blink {
+      from { opacity: 0.2; transform: translateY(0); }
+      to { opacity: 0.9; transform: translateY(-1px); }
+    }
+
+    .input-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 18px;
+      background: #f9fafb;
+      border: 1px solid rgba(229, 231, 235, 1);
+    }
+
+    .input-bar input {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(209, 213, 219, 1);
+      background: #ffffff;
+      color: var(--text-main);
+      font-size: 13px;
+      outline: none;
+      transition: all 0.14s ease;
+    }
+
+    .input-bar input::placeholder {
+      color: var(--text-soft);
+    }
+
+    .input-bar input:focus {
+      border-color: var(--nws-purple);
+      box-shadow: 0 0 0 1px rgba(108, 61, 244, 0.12);
+    }
+
+    .input-bar button {
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      background: linear-gradient(
+        135deg,
+        var(--nws-purple),
+        var(--nws-teal)
+      );
+      color: #ffffff;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 8px 22px rgba(76, 81, 191, 0.35);
+      transition: all 0.16s ease;
+      white-space: nowrap;
+    }
+
+    .input-bar button span.icon {
+      font-size: 13px;
+      transform: translateY(0.5px);
+    }
+
+    .input-bar button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 11px 30px rgba(76, 81, 191, 0.5);
+    }
+
+    .input-bar button:disabled {
+      opacity: 0.55;
+      cursor: default;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .error-banner {
+      font-size: 10px;
+      color: #b91c1c;
+      padding: 4px 8px;
+      margin-top: 3px;
+      background: #fef2f2;
+      border-radius: 8px;
+      border: 1px solid #fee2e2;
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        margin: 8px;
+        padding: 12px 10px 10px;
+      }
+      .msg {
+        max-width: 100%;
+      }
+      .app-title h1 {
+        font-size: 16px;
+      }
+      .badge-pill {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
-<h1>Mentor Étudiant - MVP</h1>
-<div id="chat"></div>
-<form id="form">
-  <input id="input" type="text" placeholder="Écris ton message..." style="width:80%" required />
-  <button type="submit">Envoyer</button>
-</form>
+<div class="app">
+  <header class="app-header">
+    <div class="avatar">N</div>
+    <div class="app-title">
+      <h1>Mentor NWS</h1>
+      <span>Accompagnement individuel dans le cadre de la Normandie Web School</span>
+      <div class="badge-nws">
+        <span>NWS</span>
+        <span style="font-weight:400;">Mentor pédagogique</span>
+      </div>
+    </div>
+    <div class="badge-pill">
+      <span class="label">
+        <span class="badge-dot"></span>
+        <span id="status-label">En ligne</span>
+      </span>
+      <span>Conforme aux règles de l'école</span>
+    </div>
+  </header>
+
+  <div class="chat-wrapper">
+    <div class="helper-bar">
+      <div>
+        Connecté en tant que
+        <span class="email-label" id="student-email-label"></span>
+      </div>
+      <div>Le mentor s'appuie sur ton historique et les ressources officielles NWS.</div>
+    </div>
+
+    <div id="chat" class="chat"></div>
+
+    <div class="input-zone">
+      <form id="form" class="input-bar">
+        <input
+          id="input"
+          type="text"
+          placeholder="Pose ta question : organisation, cours, alternance, révisions..."
+          autocomplete="off"
+          required
+        />
+        <button type="submit" id="send-btn">
+          <span class="icon">➜</span>
+          <span>Envoyer</span>
+        </button>
+      </form>
+      <div id="error" class="error-banner" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
 <script src="scripts.js"></script>
 </body>
 </html>

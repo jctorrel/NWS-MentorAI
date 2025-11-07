@@ -15,15 +15,19 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- Basic checks ---
-if (!process.env.OPENAI_API_KEY) {
-  console.error("❌ OPENAI_API_KEY manquant dans .env");
+// --- Flags ---
+const USE_MOCK = process.env.USE_MOCK_MENTOR === "true";
+const LOG_MESSAGES = process.env.LOG_MESSAGES === "true";
+
+// --- Basic env checks ---
+if (!USE_MOCK && !process.env.OPENAI_API_KEY) {
+  console.warn("⚠️  OPENAI_API_KEY manquant dans .env (requis si USE_MOCK_MENTOR !== true)");
 }
 if (!process.env.MONGODB_URI) {
-  console.error("❌ MONGODB_URI manquant dans .env");
+  console.warn("⚠️  MONGODB_URI manquant dans .env");
 }
 
-// --- App init ---
+// --- Express app ---
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -31,27 +35,27 @@ app.use(express.json());
 // --- Static files (/public) ---
 app.use(express.static(path.join(__dirname, "public")));
 
-// --- OpenAI client ---
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// --- OpenAI client (seulement si pas en mock) ---
+const openai = !USE_MOCK
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
-// --- MongoDB ---
+// --- MongoDB setup ---
 const mongoClient = new MongoClient(process.env.MONGODB_URI);
 let db;
 
 async function initMongo() {
   try {
     await mongoClient.connect();
-    db = mongoClient.db(); // DB par défaut dans l'URI
+    db = mongoClient.db();
     console.log("✅ Mongo connecté");
   } catch (err) {
     console.error("❌ Erreur connexion Mongo :", err);
   }
 }
-initMongo();
+initMongo().catch(console.error);
 
-// --- Config mentor ---
+// --- Load mentor config ---
 let config = {
   school_name: "École Démo",
   tone: "bienveillant, concret, structuré",
@@ -68,13 +72,41 @@ try {
     path.join(__dirname, "config", "mentor-config.json"),
     "utf8"
   );
-  config = JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  config = { ...config, ...parsed };
   console.log("✅ Config mentor chargée");
 } catch (err) {
-  console.warn("⚠️ Impossible de charger config/mentor-config.json, utilisation des valeurs par défaut.");
+  console.warn(
+    "⚠️ Impossible de charger config/mentor-config.json, utilisation des valeurs par défaut."
+  );
 }
 
-// --- Helpers mémoire étudiant ---
+// --- Load prompt templates ---
+function loadPrompt(name) {
+  const filePath = path.join(__dirname, "config", "prompts", name);
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    console.error(`❌ Impossible de charger le prompt ${name} :`, err);
+    return "";
+  }
+}
+
+const mentorSystemTemplate = loadPrompt("mentor-system.txt");
+const summarySystemTemplate = loadPrompt("summary-system.txt");
+
+// --- Tiny template engine ---
+function render(template, vars) {
+  return template.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    return Object.prototype.hasOwnProperty.call(vars, key) &&
+      vars[key] !== undefined &&
+      vars[key] !== null
+      ? String(vars[key])
+      : "";
+  });
+}
+
+// --- DB helpers ---
 
 async function getStudentSummary(email) {
   if (!db) return "";
@@ -82,32 +114,88 @@ async function getStudentSummary(email) {
   return doc?.summary || "";
 }
 
+async function saveMessage(email, role, content) {
+  if (!db) return;
+  if (!LOG_MESSAGES) return; // ➜ si false, on ne stocke rien
+  await db.collection("messages").insertOne({
+    email,
+    role,
+    content,
+    createdAt: new Date()
+  });
+}
+
+// --- Mock helpers ---
+
+function buildMockReply(message, summary) {
+  const safeSummary = summary || "Peu d'informations pour le moment.";
+  return [
+    "👋 (mode démo) Je suis ton mentor pédagogique de test.",
+    `Je sais pour l'instant : ${safeSummary}`,
+    `Tu viens d'écrire : "${message}"`,
+    "Dans la version connectée à l'API, je te proposerais ici un plan d'action personnalisé (organisation, priorités, ressources).",
+    "En attendant, commence par définir 1 à 3 objectifs concrets pour la semaine, et découper ton travail en petites sessions de 25-30 minutes."
+  ].join("\n");
+}
+
+async function updateStudentSummaryMock(email, lastUserMessage, lastAssistantReply) {
+  if (!db) return;
+
+  const previous = await getStudentSummary(email);
+  const truncatedUser = lastUserMessage.slice(0, 140);
+  const truncatedAssistant = lastAssistantReply.slice(0, 140);
+
+  const newSummary =
+    `• Historique (mode démo) : résumé précédent = ${previous || "aucun"}\n` +
+    `• Dernier message étudiant (extrait) : "${truncatedUser}"\n` +
+    `• Dernière réponse mentor (extrait) : "${truncatedAssistant}"\n` +
+    `• Suivi suggéré : continuer à affiner les objectifs et identifier les matières à risque.`;
+
+  await db.collection("student_summaries").updateOne(
+    { email },
+    {
+      $set: {
+        email,
+        summary: newSummary,
+        updatedAt: new Date()
+      }
+    },
+    { upsert: true }
+  );
+}
+
+// --- Summary update (réel via OpenAI ou mock) ---
+
 async function updateStudentSummary(email, lastUserMessage, lastAssistantReply) {
+  if (USE_MOCK || !openai) {
+    return updateStudentSummaryMock(email, lastUserMessage, lastAssistantReply);
+  }
+
   if (!db) return;
 
   const previous = await getStudentSummary(email);
 
-  const messages = [
-    {
-      role: "system",
-      content:
-        "Tu es un assistant qui met à jour un résumé concis (5 puces max) décrivant la situation d'un étudiant pour aider un mentor pédagogique. Tu gardes seulement les infos utiles."
-    },
-    {
-      role: "user",
-      content:
-        `Résumé actuel : ${previous || "(aucun)"}\n` +
-        `Dernier message étudiant : ${lastUserMessage}\n` +
-        `Dernière réponse mentor : ${lastAssistantReply}\n` +
-        `Produis un nouveau résumé mis à jour, en français, sous forme de puces.`
-    }
-  ];
+  const systemPrompt = render(summarySystemTemplate, {
+    previous_summary: previous || "(aucun)",
+    last_user_message: lastUserMessage,
+    last_assistant_reply: lastAssistantReply
+  });
+
+  if (!systemPrompt.trim()) {
+    console.warn("⚠️ summary-system.txt est vide ou non chargé, skip update summary.");
+    return;
+  }
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // adapte selon les modèles disponibles sur ton compte
-      messages,
-      max_tokens: 200
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        }
+      ],
+      max_tokens: 250
     });
 
     const newSummary = completion.choices[0].message.content.trim();
@@ -124,18 +212,18 @@ async function updateStudentSummary(email, lastUserMessage, lastAssistantReply) 
       { upsert: true }
     );
   } catch (err) {
-    console.error("❌ Erreur updateStudentSummary :", err);
+    console.error("❌ Erreur updateStudentSummary (OpenAI) :", err);
   }
 }
 
 // --- Routes ---
 
-// Page d'accueil (sert index.html depuis /public)
+// Page d'accueil -> public/index.html
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// Endpoint principal de chat
+// Endpoint de chat principal
 app.post("/api/chat", async (req, res) => {
   try {
     const { email, message } = req.body;
@@ -143,31 +231,44 @@ app.post("/api/chat", async (req, res) => {
     if (!email || !message) {
       return res
         .status(400)
-        .json({ error: "email et message sont requis" });
+        .json({ reply: "email et message sont requis." });
     }
 
+    // Log message utilisateur
+    await saveMessage(email, "user", message);
+
     const summary = await getStudentSummary(email);
+    const rulesText = (config.rules || [])
+      .map((r) => "- " + r)
+      .join("\n");
 
-    const systemPrompt = `
-Tu es le mentor pédagogique personnel de l'étudiant ${email} à ${config.school_name}.
-Ton ton : ${config.tone}.
+    const systemPrompt = render(mentorSystemTemplate, {
+      email,
+      school_name: config.school_name,
+      tone: config.tone,
+      rules: rulesText || "- (aucune règle définie)",
+      summary: summary || "- Aucun historique significatif pour l'instant."
+    });
 
-Règles obligatoires :
-${(config.rules || []).map((r) => "- " + r).join("\n")}
+    if (!systemPrompt.trim()) {
+      console.error("❌ mentor-system.txt est vide ou non chargé.");
+      return res.status(500).json({
+        reply:
+          "Le mentor n'est pas correctement configuré. Contacte l'équipe pédagogique."
+      });
+    }
 
-Contexte étudiant (résumé) :
-${summary || "- Aucun historique significatif pour l'instant."}
+    // --- MODE MOCK : pas d'appel OpenAI, réponse locale ---
+    if (USE_MOCK || !openai) {
+      const mockReply = buildMockReply(message, summary);
+      await saveMessage(email, "assistant", mockReply);
+      updateStudentSummary(email, message, mockReply).catch(console.error);
+      return res.json({ reply: mockReply });
+    }
 
-Ta mission :
-- Comprendre ses difficultés.
-- Poser des questions si nécessaire.
-- Proposer des actions concrètes, réalistes et bienveillantes.
-- Rester strictement dans le cadre de l'école et de son programme.
-- Ne jamais encourager l'abandon de l'école ou le contournement des règles.
-`;
-
+    // --- MODE RÉEL : appel OpenAI ---
     const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // idem, à ajuster si besoin
+      model: "gpt-4.1-mini", // adapte si besoin
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }
@@ -175,20 +276,52 @@ Ta mission :
       max_tokens: 400
     });
 
-    const reply = completion.choices[0].message.content.trim();
+    const reply =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "Je n'ai pas pu générer de réponse pour le moment.";
 
-    // Mise à jour mémoire en asynchrone (sans bloquer la réponse)
+    // Log réponse mentor
+    await saveMessage(email, "assistant", reply);
+
+    // Mise à jour mémoire en arrière-plan
     updateStudentSummary(email, message, reply).catch(console.error);
 
     return res.json({ reply });
   } catch (err) {
     console.error("❌ Erreur /api/chat :", err);
-    return res.status(500).json({ error: "Erreur interne" });
+
+    // Si problème quota, essayer un fallback mock si activé
+    if (
+      (err.status === 429 || err.code === "insufficient_quota") &&
+      USE_MOCK
+    ) {
+      const summary = await getStudentSummary(req.body.email);
+      const mockReply = buildMockReply(req.body.message, summary);
+      await saveMessage(req.body.email, "assistant", mockReply);
+      updateStudentSummary(req.body.email, req.body.message, mockReply).catch(
+        console.error
+      );
+      return res.json({ reply: mockReply });
+    }
+
+    if (err.status === 429 || err.code === "insufficient_quota") {
+      return res.status(503).json({
+        reply:
+          "Le mentor est temporairement indisponible (limite d'utilisation technique atteinte). Réessaie plus tard ou signale-le à l'équipe."
+      });
+    }
+
+    return res.status(500).json({
+      reply:
+        "Je rencontre un problème technique. Réessaie dans un moment ou signale-le à l'équipe."
+    });
   }
 });
 
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Serveur MVP sur http://localhost:${PORT}`);
+  console.log(
+    `✅ Serveur MVP sur http://localhost:${PORT} (mock=${USE_MOCK ? "ON" : "OFF"})`
+  );
 });
