@@ -318,6 +318,26 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// --- En ligne <> Hors ligne ---
+app.get('/api/health', async (req, res) => {
+  try {
+    const status = {
+      mock: USE_MOCK,
+      hasOpenAIKey: openai !== null,
+    };
+
+    // En ligne "réel" = pas mock + clé présente
+    status.ok = !status.mock && status.hasOpenAIKey;
+
+    // Si ok => 200, sinon => 503 pour bien signaler le souci
+    res.status(status.ok ? 200 : 503).json(status);
+  } catch (error) {
+    console.error('Health check error:', error);
+    res.status(500).json({ ok: false, error: 'health_check_failed' });
+  }
+});
+
+
 // --- Start server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

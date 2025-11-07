@@ -179,3 +179,62 @@ addMentorMessageMarkdown(
 );
 
 inputEl.focus();
+
+// En ligne <> Hors ligne
+document.addEventListener('DOMContentLoaded', () => {
+  const statusDot = document.getElementById('status-dot');
+  const statusLabel = document.getElementById('status-label');
+
+  function setStatus(online, reason = '') {
+    if (!statusDot || !statusLabel) return;
+
+    statusDot.classList.remove('status-online', 'status-offline');
+
+    if (online) {
+      statusDot.classList.add('status-online');
+      statusLabel.textContent = 'En ligne';
+    } else {
+      statusDot.classList.add('status-offline');
+      statusLabel.textContent = reason || 'Hors ligne';
+    }
+  }
+
+  async function checkBackendStatus() {
+    try {
+      const res = await fetch('/api/health', { method: 'GET' });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        // Cas mock
+        if (data.mock) {
+          setStatus(false, 'Mode mock (hors ligne)');
+          return;
+        }
+
+        // Cas pas de clé
+        if (data.hasOpenAIKey === false) {
+          setStatus(false, 'Hors ligne (clé OpenAI manquante)');
+          return;
+        }
+
+        // Cas erreur générique
+        setStatus(false, 'Hors ligne (erreur serveur)');
+        return;
+      }
+
+      // Tout est bon
+      setStatus(true);
+    } catch (err) {
+      setStatus(false, 'Hors ligne (serveur injoignable)');
+    }
+  }
+
+  // Premier check au chargement
+  checkBackendStatus();
+
+  // Réagit aux changements réseau
+  window.addEventListener('online', checkBackendStatus);
+  window.addEventListener('offline', () => {
+    setStatus(false, 'Hors ligne (pas de connexion réseau)');
+  });
+});
