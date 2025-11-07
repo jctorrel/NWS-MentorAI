@@ -1,0 +1,19 @@
+{
+  "A1": {
+    "Objectif": "Découvrir les métiers du numérique, acquérir les bases du web et un socle de compétences utiles",
+    "modules": {
+      "Wordpress" : 
+        [
+          "Être capable d'installer, configurer et sécuriser un site Wordpress en local (avec local)",
+          "Être capable d'installer un thème, des plugins et utiliser Divi",
+          "Être capable de migrer son site en local vers un serveur web (l'école fourni le serveur)"
+      ],
+      "Création graphique" : 
+        [
+          "Être capable d'utiliser Adobe Photoshop, Adobe Illustrator, Adobe Indesign et Figma",
+          "Être capable de réaliser une planche de tendances, un zoning, un wireframe et une maquette d'un site web",
+          "Être capable d'utiliser figma pour créer un parcours utilisateur"
+      ]
+    }
+  }
+}

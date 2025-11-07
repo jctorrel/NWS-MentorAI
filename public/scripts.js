@@ -1,5 +1,6 @@
 // Configuration minimale côté client
 const DEFAULT_EMAIL = "etudiant.test@example.com";
+const PROGRAM_ID = "A1";
 
 // Récupère l'email via ?email=... si présent, sinon valeur par défaut
 function getStudentEmail() {
@@ -21,7 +22,6 @@ const emailLabelEl = document.getElementById("student-email-label");
 emailLabelEl.textContent = studentEmail;
 
 // Utilitaires d'affichage
-
 function scrollToBottom() {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
@@ -51,7 +51,7 @@ function addMentorMessageMarkdown(text) {
   label.textContent = "Mentor";
 
   const content = document.createElement("div");
-  // Convertit le markdown en HTML en toute simplicité
+  // Convertit le markdown en HTML
   content.innerHTML = marked.parse(text, { breaks: true });
 
   bubble.appendChild(label);
@@ -104,11 +104,11 @@ function clearError() {
 }
 
 // Appel API
-
 async function sendMessage(message) {
   const payload = {
     email: studentEmail,
-    message: message
+    message: message,
+    programID : PROGRAM_ID
   };
 
   try {
@@ -160,7 +160,6 @@ async function sendMessage(message) {
 }
 
 // Gestion du formulaire
-
 formEl.addEventListener("submit", (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
@@ -171,7 +170,6 @@ formEl.addEventListener("submit", (e) => {
 });
 
 // Message d'accueil
-
 addMentorMessageMarkdown(
   "Bonjour 👋\n\nJe suis ton mentor pédagogique numérique. " +
     "Explique-moi ta situation, tes difficultés ou tes objectifs, " +
@@ -204,20 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await fetch('/api/health', { method: 'GET' });
       const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || !data.ok) {
-        // Cas mock
-        if (data.mock) {
-          setStatus(false, 'Mode mock (hors ligne)');
-          return;
-        }
-
-        // Cas pas de clé
-        if (data.hasOpenAIKey === false) {
-          setStatus(false, 'Hors ligne (clé OpenAI manquante)');
-          return;
-        }
-
-        // Cas erreur générique
+      if (!res.ok || !data) {
         setStatus(false, 'Hors ligne (erreur serveur)');
         return;
       }

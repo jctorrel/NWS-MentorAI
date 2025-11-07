@@ -2,6 +2,9 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+const MENTOR_MODEL = process.env.MENTOR_MODEL || "gpt-4.1-mini";
+const SUMMARY_MODEL = process.env.SUMMARY_MODEL || "gpt-4.1-mini";
+
 // --- Imports ---
 import express from "express";
 import cors from "cors";
@@ -16,12 +19,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- Flags ---
-const USE_MOCK = process.env.USE_MOCK_MENTOR === "true";
 const LOG_MESSAGES = process.env.LOG_MESSAGES === "true";
 
 // --- Basic env checks ---
-if (!USE_MOCK && !process.env.OPENAI_API_KEY) {
-  console.warn("⚠️  OPENAI_API_KEY manquant dans .env (requis si USE_MOCK_MENTOR !== true)");
+if (!process.env.OPENAI_API_KEY) {
+  console.warn("⚠️  OPENAI_API_KEY manquant dans .env");
 }
 if (!process.env.MONGODB_URI) {
   console.warn("⚠️  MONGODB_URI manquant dans .env");
@@ -35,10 +37,8 @@ app.use(express.json());
 // --- Static files (/public) ---
 app.use(express.static(path.join(__dirname, "public")));
 
-// --- OpenAI client (seulement si pas en mock) ---
-const openai = !USE_MOCK
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
+// --- OpenAI client ---
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // --- MongoDB setup ---
 const mongoClient = new MongoClient(process.env.MONGODB_URI);
@@ -56,17 +56,7 @@ async function initMongo() {
 initMongo().catch(console.error);
 
 // --- Load mentor config ---
-let config = {
-  school_name: "École Démo",
-  tone: "bienveillant, concret, structuré",
-  rules: [
-    "Ne jamais conseiller à l'étudiant de quitter l'école.",
-    "Ne pas remettre en cause le programme officiel.",
-    "Toujours encourager des stratégies de travail réalistes.",
-    "Rediriger vers un humain en cas de détresse ou problème grave."
-  ]
-};
-
+let config = {};
 try {
   const raw = fs.readFileSync(
     path.join(__dirname, "config", "mentor-config.json"),
@@ -125,53 +115,10 @@ async function saveMessage(email, role, content) {
   });
 }
 
-// --- Mock helpers ---
 
-function buildMockReply(message, summary) {
-  const safeSummary = summary || "Peu d'informations pour le moment.";
-  return [
-    "👋 (mode démo) Je suis ton mentor pédagogique de test.",
-    `Je sais pour l'instant : ${safeSummary}`,
-    `Tu viens d'écrire : "${message}"`,
-    "Dans la version connectée à l'API, je te proposerais ici un plan d'action personnalisé (organisation, priorités, ressources).",
-    "En attendant, commence par définir 1 à 3 objectifs concrets pour la semaine, et découper ton travail en petites sessions de 25-30 minutes."
-  ].join("\n");
-}
-
-async function updateStudentSummaryMock(email, lastUserMessage, lastAssistantReply) {
-  if (!db) return;
-
-  const previous = await getStudentSummary(email);
-  const truncatedUser = lastUserMessage.slice(0, 140);
-  const truncatedAssistant = lastAssistantReply.slice(0, 140);
-
-  const newSummary =
-    `• Historique (mode démo) : résumé précédent = ${previous || "aucun"}\n` +
-    `• Dernier message étudiant (extrait) : "${truncatedUser}"\n` +
-    `• Dernière réponse mentor (extrait) : "${truncatedAssistant}"\n` +
-    `• Suivi suggéré : continuer à affiner les objectifs et identifier les matières à risque.`;
-
-  await db.collection("student_summaries").updateOne(
-    { email },
-    {
-      $set: {
-        email,
-        summary: newSummary,
-        updatedAt: new Date()
-      }
-    },
-    { upsert: true }
-  );
-}
-
-// --- Summary update (réel via OpenAI ou mock) ---
-
+// --- Summary update  ---
 async function updateStudentSummary(email, lastUserMessage, lastAssistantReply) {
-  if (USE_MOCK || !openai) {
-    return updateStudentSummaryMock(email, lastUserMessage, lastAssistantReply);
-  }
-
-  if (!db) return;
+  if (!openai || !db) return;
 
   const previous = await getStudentSummary(email);
 
@@ -187,18 +134,12 @@ async function updateStudentSummary(email, lastUserMessage, lastAssistantReply) 
   }
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt
-        }
-      ],
-      max_tokens: 250
+    const completion = await openai.responses.create({
+      model: SUMMARY_MODEL,
+      input: systemPrompt
     });
 
-    const newSummary = completion.choices[0].message.content.trim();
+    const newSummary = completion.output_text.trim();
 
     await db.collection("student_summaries").updateOne(
       { email },
@@ -216,6 +157,20 @@ async function updateStudentSummary(email, lastUserMessage, lastAssistantReply) 
   }
 }
 
+// --- Load programs config ---
+let programs = {};
+
+try {
+  const raw = fs.readFileSync(
+    path.join(__dirname, "config", "programs.json"),
+    "utf8"
+  );
+  programs = JSON.parse(raw);
+  console.log("✅ Programmes chargés");
+} catch (err) {
+  console.warn("⚠️ Impossible de charger config/programs.json, aucun programme en mémoire.");
+}
+
 // --- Routes ---
 
 // Page d'accueil -> public/index.html
@@ -226,7 +181,7 @@ app.get("/", (req, res) => {
 // Endpoint de chat principal
 app.post("/api/chat", async (req, res) => {
   try {
-    const { email, message } = req.body;
+    const { email, message, programId } = req.body;
 
     if (!email || !message) {
       return res
@@ -241,13 +196,15 @@ app.post("/api/chat", async (req, res) => {
     const rulesText = (config.rules || [])
       .map((r) => "- " + r)
       .join("\n");
+    const programContext = programs[programId];
 
     const systemPrompt = render(mentorSystemTemplate, {
       email,
       school_name: config.school_name,
       tone: config.tone,
-      rules: rulesText || "- (aucune règle définie)",
-      summary: summary || "- Aucun historique significatif pour l'instant."
+      rules: rulesText,
+      summary: summary || "- Aucun historique significatif pour l'instant.",
+      program_context: programContext
     });
 
     if (!systemPrompt.trim()) {
@@ -258,27 +215,13 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    // --- MODE MOCK : pas d'appel OpenAI, réponse locale ---
-    if (USE_MOCK || !openai) {
-      const mockReply = buildMockReply(message, summary);
-      await saveMessage(email, "assistant", mockReply);
-      updateStudentSummary(email, message, mockReply).catch(console.error);
-      return res.json({ reply: mockReply });
-    }
-
-    // --- MODE RÉEL : appel OpenAI ---
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // adapte si besoin
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: message }
-      ],
-      max_tokens: 400
+    const completion = await openai.responses.create({
+      model: MENTOR_MODEL,
+      instructions: systemPrompt,
+      input: message
     });
 
-    const reply =
-      completion.choices?.[0]?.message?.content?.trim() ||
-      "Je n'ai pas pu générer de réponse pour le moment.";
+    const reply = completion.output_text.trim();
 
     // Log réponse mentor
     await saveMessage(email, "assistant", reply);
@@ -289,20 +232,6 @@ app.post("/api/chat", async (req, res) => {
     return res.json({ reply });
   } catch (err) {
     console.error("❌ Erreur /api/chat :", err);
-
-    // Si problème quota, essayer un fallback mock si activé
-    if (
-      (err.status === 429 || err.code === "insufficient_quota") &&
-      USE_MOCK
-    ) {
-      const summary = await getStudentSummary(req.body.email);
-      const mockReply = buildMockReply(req.body.message, summary);
-      await saveMessage(req.body.email, "assistant", mockReply);
-      updateStudentSummary(req.body.email, req.body.message, mockReply).catch(
-        console.error
-      );
-      return res.json({ reply: mockReply });
-    }
 
     if (err.status === 429 || err.code === "insufficient_quota") {
       return res.status(503).json({
@@ -321,16 +250,10 @@ app.post("/api/chat", async (req, res) => {
 // --- En ligne <> Hors ligne ---
 app.get('/api/health', async (req, res) => {
   try {
-    const status = {
-      mock: USE_MOCK,
-      hasOpenAIKey: openai !== null,
-    };
+    const status = openai !== null;
 
-    // En ligne "réel" = pas mock + clé présente
-    status.ok = !status.mock && status.hasOpenAIKey;
-
-    // Si ok => 200, sinon => 503 pour bien signaler le souci
-    res.status(status.ok ? 200 : 503).json(status);
+    // Si ok => 200, sinon => 503
+    res.status(status ? 200 : 503).json(status);
   } catch (error) {
     console.error('Health check error:', error);
     res.status(500).json({ ok: false, error: 'health_check_failed' });
@@ -342,6 +265,6 @@ app.get('/api/health', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(
-    `✅ Serveur MVP sur http://localhost:${PORT} (mock=${USE_MOCK ? "ON" : "OFF"})`
+    `✅ Serveur MVP sur http://localhost:${PORT}`
   );
 });
