@@ -3,10 +3,18 @@ import cors from "cors";
 import { MongoClient } from "mongodb";
 import OpenAI from "openai";
 import fs from "fs";
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const mongoClient = new MongoClient(process.env.MONGODB_URI);
@@ -20,6 +28,10 @@ async function init() {
   console.log("Mongo connecté, MVP prêt.");
 }
 init().catch(console.error);
+
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 // Récupérer le résumé "mémoire" d'un étudiant
 async function getStudentSummary(email) {
